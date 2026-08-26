@@ -13,3 +13,7 @@ files are your memory.
 
 Do not spend validation or holdout looks unless INDEX.md's Next section
 already called for it and the attempt is promising on train.
+
+Finish on the trunk: merge the branch if its work is concluded (or leave it
+for the next tick), but `git checkout master` before you end so every tick
+starts from the considered state.
