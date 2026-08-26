@@ -1,0 +1,17 @@
+# Attempt preset. Copy this directory from attempts/_template/ and edit.
+# The contract tables and fee schedule are campaign facts: leave them alone.
+factory = "rhai"
+assets = [{{ASSETS_TOML}}]
+roll_adjust = true
+
+{{CONTRACTS}}
+
+[strategy]
+script = "strategy.rhai"
+script_history = 512      # candles of history the script can see
+min_score = 0.0
+rr = 2.0                  # engine-side default target; the script may set its own
+max_hold = 4000000000     # effectively no hold timeout; tighten deliberately
+
+[script]
+# Free-form knobs read by strategy.rhai via cfg.script.*

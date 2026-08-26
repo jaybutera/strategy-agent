@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# sa <new|eval|gate|ledger|loop|digest> ... — dispatcher for the sa commands.
+set -euo pipefail
+CORE="$(cd "$(dirname "$0")/.." && pwd)"
+cmd="${1:-}"; shift || true
+[[ -f "$CORE/cmd/$cmd.py" ]] || { echo "usage: sa <new|eval|gate|ledger|loop|digest> ..." >&2; exit 2; }
+exec uv run --script "$CORE/cmd/$cmd.py" "$@"
