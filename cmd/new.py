@@ -186,9 +186,12 @@ shelve_families = {int(o['shelve-families'])}
     (tpl / "strategy.rhai").write_text(render("strategy.rhai", subs))
     (root / ".claude" / "settings.json").write_text(json.dumps({
         "permissions": {"allow": [
-            "Bash(./sa:*)", "Bash(git:*)", "Bash(rg:*)", "Bash(grep:*)",
-            "Bash(ls:*)", "Bash(cat:*)", "Bash(head:*)", "Bash(tail:*)",
-            "Bash(jq:*)", "Bash(cp:*)", "Bash(mkdir:*)", "Bash(mv:*)", "Bash(wc:*)", "Bash(sed -n:*)",
+            "Bash(./sa:*)", "Bash(./tools/:*)", "Bash(git:*)", "Bash(rg:*)",
+            "Bash(grep:*)", "Bash(ls:*)", "Bash(cat:*)", "Bash(head:*)",
+            "Bash(tail:*)", "Bash(jq:*)", "Bash(cp:*)", "Bash(mkdir:*)",
+            "Bash(mv:*)", "Bash(wc:*)", "Bash(sed -n:*)",
+            "WebSearch", "WebFetch",
+            f"Read(//{str(engine.parents[2]).lstrip('/')}/**)",
         ]}}, indent=2) + "\n")
     sa = root / "sa"
     sa.write_text(f"""#!/usr/bin/env bash

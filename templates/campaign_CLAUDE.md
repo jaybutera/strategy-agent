@@ -56,9 +56,15 @@ Research is organized as **hypotheses** and **attempts**.
   eval artifact together.
 - Keep `INDEX.md` current: it is the only state the next fresh context is
   guaranteed to read. Update its "Now" and "Next" sections before you stop.
-- New ideas arrive in `inbox/*.jsonl` (records with source/ts/author/text).
-  Triage them: worthwhile ones become hypotheses with dossiers; note the
-  source. Delete nothing.
+- Research is part of the job, not a pre-loaded input. Use web search for
+  market-structure facts, session conventions, contract specs, and published
+  work on a mechanism. Scripts in `tools/` (if present) are live research
+  sources this campaign provides; read their --help. One hard rule: never
+  look up what the market did after the train window ends. Price levels,
+  headlines, or commentary dated inside the validation or holdout windows
+  poison the eval; if you encounter them, do not let them steer an attempt.
+- `inbox/*.jsonl` (if present) holds pushed idea records; triage the same
+  way and cite the source. Delete nothing.
 - The Rhai API: see `{{ENGINE_REPO}}/scripts/rhai/` for working strategies
   and `{{ENGINE_REPO}}/config/strategy/rsi_atr.toml` for a preset. `init(cfg)`
   returns your state map; `on_candle(c)` returns opportunities via

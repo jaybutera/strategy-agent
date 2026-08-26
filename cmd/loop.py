@@ -17,6 +17,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -28,7 +29,10 @@ def main():
     argv = sys.argv[1:]
     n = int(argv[argv.index("-n") + 1]) if "-n" in argv else 1
     model = argv[argv.index("--model") + 1] if "--model" in argv else None
+    max_minutes = (float(argv[argv.index("--max-minutes") + 1])
+                   if "--max-minutes" in argv else None)
     yolo = "--yolo" in argv
+    started = time.monotonic()
     root = find_campaign_root()
     prompt = (root / ".sa" / "tick.md").read_text()
     agent_cmd = os.environ.get("SA_AGENT_CMD", "claude")
@@ -47,6 +51,12 @@ def main():
                   f"dialog, or set projects[\"{root}\"].hasTrustDialogAccepted in ~/.claude.json.")
 
     for i in range(1, n + 1):
+        if max_minutes is not None:
+            elapsed = (time.monotonic() - started) / 60
+            if elapsed >= max_minutes:
+                print(f"time budget reached ({elapsed:.0f} of {max_minutes:.0f} minutes) "
+                      f"after {i - 1} ticks; stopping.")
+                break
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         log = root / ".sa" / "ticks" / f"{stamp}.log"
         log.parent.mkdir(parents=True, exist_ok=True)
