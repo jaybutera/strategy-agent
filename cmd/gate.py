@@ -45,8 +45,13 @@ def main():
             print(f"{split}: {spends_of(vault, split)}/{budget[split + '_looks']} looks spent")
         return
 
-    args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    split = sys.argv[sys.argv.index("--split") + 1] if "--split" in sys.argv else None
+    argv = sys.argv[1:]
+    split = None
+    if "--split" in argv:
+        i = argv.index("--split")
+        split = argv[i + 1]
+        argv = argv[:i] + argv[i + 2:]
+    args = [a for a in argv if not a.startswith("--")]
     if len(args) != 1 or split not in ("validation", "holdout"):
         die("usage: sa gate attempts/<id> --split validation|holdout   (or sa gate --spends)")
     attempt_dir = (root / args[0]).resolve()

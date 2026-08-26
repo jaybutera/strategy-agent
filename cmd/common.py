@@ -129,6 +129,10 @@ def ledger_state(records):
                              "status": "draft", "branch": r.get("branch")}
             if r.get("hypothesis") in hyps and r.get("family"):
                 hyps[r["hypothesis"]]["families"].add(r["family"])
+        elif t == "eval":
+            a = atts.get(r.get("attempt"))
+            if a is not None and a["status"] == "draft":
+                a["status"] = "evaluated"
         elif t == "verdict":
             if r["attempt"] in atts:
                 atts[r["attempt"]]["status"] = r["status"]
