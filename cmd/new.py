@@ -188,7 +188,7 @@ shelve_families = {int(o['shelve-families'])}
         "permissions": {"allow": [
             "Bash(./sa:*)", "Bash(git:*)", "Bash(rg:*)", "Bash(grep:*)",
             "Bash(ls:*)", "Bash(cat:*)", "Bash(head:*)", "Bash(tail:*)",
-            "Bash(jq:*)",
+            "Bash(jq:*)", "Bash(cp:*)", "Bash(mkdir:*)", "Bash(mv:*)", "Bash(wc:*)", "Bash(sed -n:*)",
         ]}}, indent=2) + "\n")
     sa = root / "sa"
     sa.write_text(f"""#!/usr/bin/env bash
