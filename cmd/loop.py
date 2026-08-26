@@ -13,6 +13,7 @@ tick anything left uncommitted is committed so no tick can strand work.
 The agent CLI is configurable (SA_AGENT_CMD, default "claude"); any agent
 that takes a -p prompt and works a directory can drive a tick.
 """
+import json
 import os
 import subprocess
 import sys
@@ -31,6 +32,19 @@ def main():
     root = find_campaign_root()
     prompt = (root / ".sa" / "tick.md").read_text()
     agent_cmd = os.environ.get("SA_AGENT_CMD", "claude")
+
+    if agent_cmd == "claude" and not yolo:
+        cfgp = Path.home() / ".claude.json"
+        try:
+            trusted = json.loads(cfgp.read_text()).get("projects", {}) \
+                .get(str(root), {}).get("hasTrustDialogAccepted")
+        except (OSError, json.JSONDecodeError):
+            trusted = None
+        if not trusted:
+            print(f"warning: {root} is not a trusted Claude workspace, so the campaign's "
+                  "Bash allowlist will be ignored and ticks cannot run ./sa or git.\n"
+                  "Fix: open an interactive claude session here once and accept the trust "
+                  f"dialog, or set projects[\"{root}\"].hasTrustDialogAccepted in ~/.claude.json.")
 
     for i in range(1, n + 1):
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
