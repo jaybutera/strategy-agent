@@ -63,7 +63,11 @@ Research is organized as **hypotheses** and **attempts**.
   and `{{ENGINE_REPO}}/config/strategy/rsi_atr.toml` for a preset. `init(cfg)`
   returns your state map; `on_candle(c)` returns opportunities via
   `opp(name, tf, dir, ts)` with `entry`/`stop`/`score` set; `hist(tf)` gives
-  candle history. `campaign.toml` is read-only; so is the engine.
+  candle history; `market("NQ")` gives ANY loaded asset's series with
+  `.count(lo,hi)`, `.lowest_low(lo,hi)`, `.highest_high(lo,hi)`,
+  `.window(lo,hi)` over unix-second bounds `(lo, hi]`, clamped so a script
+  can never read a sibling's future — cross-asset filters (SMT and friends)
+  are first-class. `campaign.toml` is read-only; so is the engine.
 
 ## Ledger quick reference
 
