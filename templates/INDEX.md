@@ -5,13 +5,14 @@ detail lives in dossiers/, attempts/, and the ledger. -->
 
 ## Now
 
-Campaign just created. No hypotheses yet. Start by triaging `inbox/` and
-reading `goal.md`.
+Campaign just created. No hypotheses yet. Start with `goal.md`, then
+research: web search and any `tools/` scripts are live sources.
 
 ## Next
 
-- Triage inbox into candidate hypotheses (dossiers + ledger entries).
-- Pick the most promising hypothesis and design a first attempt.
+- Research sources deeply; register the strongest mechanism as a hypothesis
+  with a sourced dossier.
+- Design a first attempt for it.
 
 ## Standing notes
 
