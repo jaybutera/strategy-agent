@@ -7,12 +7,18 @@
   sa loop --merge           one tick prompted from .sa/merge.md instead
   sa loop -n 5 --no-sync    do not fetch or push around ticks
   sa loop -n 5 --max-minutes 90
+  sa loop --forever         run until Ctrl-C; a failed tick backs off and retries
 
 Each tick is a headless `claude -p` invocation in the campaign directory,
 prompted from .sa/tick.md: read goal + index, probe memory, do the next most
 useful task, write back, commit. After each tick anything left uncommitted is
 committed so no tick can strand work. Ctrl-C stops the loop the same way:
 leftovers are committed, the clone returns to master, and everything is pushed.
+
+`--forever` is the unattended mode: it ignores -n and --max-minutes, and a
+tick that fails (agent error, rate limit, git trouble, a crash inside the
+loop) is followed by a wait that doubles from one minute up to fifteen before
+the next tick; a good tick resets the wait. Only Ctrl-C ends it.
 
 When the campaign has an `origin` remote the loop fetches before each tick and
 pushes after it. It never merges: merging derived files is distillation, which
@@ -65,10 +71,12 @@ def elide_events(lines):
             continue                      # not our format; drop the line
         if not isinstance(ev, dict):
             continue
-        for block in (ev.get("message") or {}).get("content") or []:
+        msg = ev.get("message")
+        msg = msg if isinstance(msg, dict) else {}
+        content = msg.get("content")
+        for block in content if isinstance(content, list) else []:
             if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") == "Read":
                 reads[block.get("id")] = (block.get("input") or {}).get("file_path")
-        content = (ev.get("message") or {}).get("content")
         if isinstance(content, list):
             for i, block in enumerate(content):
                 if isinstance(block, dict) and block.get("type") == "tool_result":
@@ -107,6 +115,7 @@ def main():
     max_minutes = (float(argv[argv.index("--max-minutes") + 1])
                    if "--max-minutes" in argv else None)
     yolo = "--yolo" in argv
+    forever = "--forever" in argv
     merge_mode = "--merge" in argv
     sync = "--no-sync" not in argv
     started = time.monotonic()
@@ -137,13 +146,14 @@ def main():
                   "Fix: open an interactive claude session here once and accept the trust "
                   f"dialog, or set projects[\"{root}\"].hasTrustDialogAccepted in ~/.claude.json.")
 
-    for i in range(1, n + 1):
-        if max_minutes is not None:
+    def tick(i):
+        """One tick. Returns "ok", "failed", or "stop"."""
+        if max_minutes is not None and not forever:
             elapsed = (time.monotonic() - started) / 60
             if elapsed >= max_minutes:
                 print(f"time budget reached ({elapsed:.0f} of {max_minutes:.0f} minutes) "
                       f"after {i - 1} ticks; stopping.")
-                break
+                return "stop"
         if sync:
             r = subprocess.run(["git", "-C", str(root), "fetch", "origin"],
                                capture_output=True, text=True)
@@ -171,18 +181,26 @@ def main():
                 else ["--permission-mode", "acceptEdits"])
         if agent_cmd == "claude":
             cmd += ["--output-format", "stream-json", "--verbose"]
-        print(f"tick {i}/{n}{' (merge)' if merge_mode else ''} -> {stamp}")
+        print(f"tick {i}/{'forever' if forever else n}{' (merge)' if merge_mode else ''} -> {stamp}")
 
         try:
             if stream:
                 r = subprocess.run(cmd, cwd=root, capture_output=True, text=True, env=env)
-                events = elide_events(r.stdout.splitlines())
                 rawdir = root / "raw" / tag / "ticks"
                 rawdir.mkdir(parents=True, exist_ok=True)
-                with open(rawdir / f"{stamp}.jsonl", "w") as f:
-                    for ev in events:
-                        f.write(json.dumps(ev, separators=(",", ":")) + "\n")
-                log.write_text(result_text(events) or r.stderr)
+                rawfile = rawdir / f"{stamp}.jsonl"
+                try:
+                    events = elide_events(r.stdout.splitlines())
+                    with open(rawfile, "w") as f:
+                        for ev in events:
+                            f.write(json.dumps(ev, separators=(",", ":")) + "\n")
+                    log.write_text(result_text(events) or r.stderr)
+                except Exception as e:                  # noqa: BLE001
+                    # A transcript is never dropped: keep it verbatim if the
+                    # elision failed, and say so in the tick log.
+                    rawfile.write_text(r.stdout)
+                    log.write_text(f"raw transcript kept unprocessed ({type(e).__name__}: {e})\n"
+                                   + (r.stderr or ""))
             else:
                 with open(log, "w") as f:
                     r = subprocess.run(cmd, cwd=root, stdout=f, stderr=subprocess.STDOUT,
@@ -202,7 +220,8 @@ def main():
 
         for line in log.read_text().strip().splitlines()[-6:]:
             print(f"  {line}")
-        if r.returncode != 0:
+        ok = r.returncode == 0
+        if not ok:
             print(f"  tick exited {r.returncode}; see {log}")
         if git(root, "status", "--porcelain"):
             git_commit_all(root, f"tick {stamp}: uncommitted leftovers")
@@ -215,6 +234,42 @@ def main():
                 print("  push rejected; the next tick's merge job will bring origin in:")
                 for line in p.stderr.strip().splitlines()[-3:]:
                     print(f"    {line}")
+        return "ok" if ok else "failed"
+
+
+    wait = 0
+    i = 0
+    while True:
+        i += 1
+        if not forever and i > n:
+            break
+        try:
+            outcome = tick(i)
+        except KeyboardInterrupt:
+            raise
+        except SystemExit as e:
+            if not forever:
+                raise
+            outcome = "failed"
+            print(f"  tick {i} aborted (exit {e.code}); the loop continues")
+        except Exception as e:                      # noqa: BLE001
+            if not forever:
+                raise
+            outcome = "failed"
+            print(f"  tick {i} crashed: {type(e).__name__}: {e}; the loop continues")
+        if outcome == "stop" and not forever:
+            break
+        if outcome == "ok":
+            wait = 0
+            continue
+        if forever:
+            wait = min(max(60, wait * 2), 900)
+            print(f"  waiting {wait // 60} min before the next tick")
+            try:
+                time.sleep(wait)
+            except KeyboardInterrupt:
+                print("\ninterrupted while waiting; stopping.")
+                sys.exit(130)
 
 
 if __name__ == "__main__":
