@@ -16,8 +16,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from common import (die, find_campaign_root, git_commit_all, ledger_append,
-                    load_campaign, run_engine, summarize_report)
+from common import (check_engine_pin, die, find_campaign_root, git_commit_all,
+                    ledger_append, load_campaign, run_engine, summarize_report)
 
 
 def main():
@@ -27,6 +27,7 @@ def main():
         die("usage: sa eval attempts/<id> [--no-commit]")
     root = find_campaign_root()
     cfg = load_campaign(root)
+    engine_commit = check_engine_pin(cfg)
     attempt_dir = (root / args[0]).resolve()
     preset = attempt_dir / "preset.toml"
     if not preset.exists():
@@ -62,6 +63,7 @@ def main():
     evdir = attempt_dir / "eval"
     evdir.mkdir(exist_ok=True)
     metrics = {"split": "train", "windows": windows, "warmup_days": warmup,
+               "engine_commit": engine_commit,
                "lenses": per_lens, "headline": headline, "floor": floor,
                "fill_sensitive": fill_sensitive}
     (evdir / "metrics.json").write_text(json.dumps(metrics, indent=2) + "\n")

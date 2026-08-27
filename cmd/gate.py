@@ -21,9 +21,9 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from common import (die, find_campaign_root, git_commit_all, ledger_append,
-                    load_campaign, now_iso, run_engine, summarize_report,
-                    vault_for)
+from common import (check_engine_pin, die, find_campaign_root, git_commit_all,
+                    ledger_append, ledger_read, ledger_state, load_campaign,
+                    now_iso, run_engine, summarize_report, vault_for)
 
 
 def spends_of(vault, split):
@@ -64,6 +64,15 @@ def main():
     if spent >= total:
         die(f"{split} budget exhausted ({spent}/{total} looks). The counter does not reset; "
             "a new campaign is a human decision.")
+    # The vault log is authoritative and machine-local, so it cannot see looks
+    # a co-holder spent. The merged ledger can: it is the cross-holder backstop.
+    ledger_spent = ledger_state(ledger_read(root))[2].get(split, 0)
+    if ledger_spent >= total:
+        die(f"{split} budget exhausted in the merged ledger ({ledger_spent}/{total} looks) "
+            f"even though this machine's vault log shows {spent}. Another holder spent the "
+            "rest. The counter does not reset; a new campaign is a human decision.")
+
+    engine_commit = check_engine_pin(cfg)
 
     fills = cfg["engine"]["fills"]
     lenses = [fills[0]] + ([fills[-1]] if len(fills) > 1 else [])
@@ -95,6 +104,7 @@ def main():
     outdir.mkdir(parents=True, exist_ok=True)
     (outdir / "results.json").write_text(json.dumps(
         {"split": split, "look": look_n, "windows": windows, "jitters": jitters,
+         "engine_commit": engine_commit,
          "summary": summary, "detail": detail}, indent=2) + "\n")
     lines = [f"# {attempt_id} {split} look {look_n}/{total}", "",
              f"windows: {', '.join(f'{a}..{b}' for a, b in windows)}  "
@@ -103,6 +113,9 @@ def main():
     for fill, s in summary.items():
         lines.append(f"| {fill} | {s['runs']} | {s['mean_r']} | {s['min_r']} | {s['max_r']} |")
     (outdir / "report.md").write_text("\n".join(lines) + "\n")
+    (outdir / "metrics.json").write_text(json.dumps(
+        {"split": split, "look": look_n, "windows": windows, "warmup_days": warmup,
+         "jitters": jitters, "engine_commit": engine_commit, "lenses": summary}, indent=2) + "\n")
 
     with open(vault / "spends.jsonl", "a") as f:
         f.write(json.dumps({"ts": now_iso(), "split": split, "attempt": attempt_id,

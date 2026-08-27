@@ -48,6 +48,8 @@ can switch between driving it interactively and letting it run.
     cmd/ledger.py   append-only ledger with the state machine
     cmd/loop.py     fresh-context ticks (headless claude -p, agent-configurable)
     cmd/digest.py   morning report from ledger + git log
+    cmd/raw.py      readable replay of a tick's raw transcript
+    cmd/upgrade.py  bring an older campaign's harness files up to date
 
 Everything else is markdown convention plus git. Attempts are commits,
 attempt families are branches, `INDEX.md` is what a fresh context reads
@@ -62,6 +64,55 @@ Walk-forward: alternating train/validation segments; one counted look runs
 every validation segment. The holdout is always a terminal tail. A
 validation look runs as a warmup-jitter ensemble, so it buys a distribution,
 not a coin flip.
+
+## Collaborating
+
+Two people can work one campaign from two machines. Put a bare repo on a box
+both can reach and push to it:
+
+    ssh hub 'git init --bare ~/git/my-campaign.git'
+    cd ~/campaigns/my-campaign
+    git remote add origin hub:git/my-campaign.git
+    git push -u origin master
+
+The other person clones it, names themselves, and works:
+
+    git clone hub:git/my-campaign.git ~/campaigns/my-campaign
+    cd ~/campaigns/my-campaign
+    git config sa.holder f            # your token; the first person sets theirs too
+    ./sa loop -n 5
+
+They need the same layout: `~/src/strategy-agent` for the harness (or
+`SA_CORE` pointing at it) and `~/src/backtest-engine` built at the commit
+`campaign.toml` pins under `engine.commit`. Eval and gate refuse to run
+against a different engine build, because numbers from two builds are not
+comparable.
+
+Ids are namespaced by holder (`c-H1`, `f-A3`), so both clones mint
+hypotheses and attempts concurrently without collision. `ledger.jsonl` is
+union-merged, so no record is lost to a merge. The loop fetches before each
+tick and pushes after it, and never merges by itself.
+
+Merging is the agent's job, not git's. `./sa loop --merge` runs one tick
+against `.sa/merge.md`: it reads the incoming attempts and rewrites the
+dossiers, `LESSONS.md` and `INDEX.md` from that evidence so they read as one
+picture. Conflicts in derived files are resolved by distillation, never by
+keeping both sides. Branch-and-merge is otherwise ordinary; the convention
+is `<holder>/<family>` for attempt-family branches.
+
+Counted looks are gated from the clone that owns the vault, since the vault
+is machine-local and holds the authoritative spend log. The merged ledger's
+`spend` records are a cross-holder backstop: the gate refuses when either
+counter has reached the budget.
+
+Raw transcripts are committed under `raw/<holder>/`: `ticks/<stamp>.jsonl`
+from the loop, `sessions/<date>.jsonl` from interactive sessions via a hook
+the campaign registers in its own `.claude/settings.json`. Tool results over
+4 KB are truncated and `Read` results are dropped, since the file at that
+commit is already the record. `./sa raw <tick-stamp|attempt-id>` replays one.
+
+To bring a campaign made before all this up to date, run `./sa upgrade`
+inside it. It rewrites harness files and leaves research content alone.
 
 ## Honesty about enforcement
 

@@ -57,6 +57,27 @@ def die(msg, code=1):
     sys.exit(code)
 
 
+# ---------------------------------------------------------------- holder
+
+def holder(root=None, required=True):
+    """The holder token for this clone: `git config sa.holder`, else $SA_HOLDER.
+
+    Two people sharing a campaign each set their own token; ids are namespaced
+    with it so both can mint concurrently without collisions."""
+    if root is not None:
+        r = subprocess.run(["git", "-C", str(root), "config", "--get", "sa.holder"],
+                           capture_output=True, text=True)
+        if r.returncode == 0 and r.stdout.strip():
+            return r.stdout.strip()
+    env = os.environ.get("SA_HOLDER", "").strip()
+    if env:
+        return env
+    if required:
+        die("no holder token: run `git config sa.holder <token>` in this clone "
+            "(a short lowercase string, one per person) or set SA_HOLDER")
+    return None
+
+
 # ---------------------------------------------------------------- campaign
 
 def find_campaign_root(start=None):
@@ -110,20 +131,36 @@ def ledger_read(root):
             out.append(json.loads(line))
         except json.JSONDecodeError:
             die(f"ledger line {i + 1} is not valid JSON; the ledger is append-only, do not hand-edit it")
+    # Union-merged ledgers interleave two holders' appends in arbitrary file
+    # order; time order is the real order. Stable sort, records without a ts
+    # keep file order at the front.
+    out.sort(key=lambda r: (r.get("ts") is not None, r.get("ts") or ""))
     return out
 
 
-def ledger_state(records):
+def ledger_state(records, warnings=None):
     """Fold the ledger into current state: hypotheses and attempts with
-    their latest status, plus spend counts per split."""
+    their latest status, plus spend counts per split.
+
+    Reading never dies. Two holders can each append a legal verdict and the
+    merged sequence can be illegal; the latest record by ts wins and the
+    transition is reported through `warnings` (a list the caller passes in).
+    Write-time validation is where illegal transitions are actually refused."""
     hyps, atts, spends = {}, {}, {"validation": 0, "holdout": 0}
+    warn = warnings if warnings is not None else []
     for r in records:
         t = r.get("type")
         if t == "hypothesis":
             hyps[r["id"]] = {"title": r.get("title", ""), "status": "active", "families": set()}
         elif t == "hypothesis-status":
-            if r["id"] in hyps:
-                hyps[r["id"]]["status"] = r["status"]
+            h = hyps.get(r.get("id"))
+            if h is None:
+                warn.append(f"hypothesis-status for unknown hypothesis {r.get('id')}")
+                continue
+            if r.get("status") not in HYPOTHESIS_TRANSITIONS.get(h["status"], set()):
+                warn.append(f"hypothesis {r['id']}: {h['status']} -> {r.get('status')} "
+                            f"is not a legal transition (applied anyway, from ts {r.get('ts')})")
+            h["status"] = r["status"]
         elif t == "attempt":
             atts[r["id"]] = {"hypothesis": r.get("hypothesis"), "family": r.get("family"),
                              "status": "draft", "branch": r.get("branch")}
@@ -134,14 +171,25 @@ def ledger_state(records):
             if a is not None and a["status"] == "draft":
                 a["status"] = "evaluated"
         elif t == "verdict":
-            if r["attempt"] in atts:
-                atts[r["attempt"]]["status"] = r["status"]
+            a = atts.get(r.get("attempt"))
+            if a is None:
+                warn.append(f"verdict for unknown attempt {r.get('attempt')}")
+                continue
+            if r.get("status") not in ATTEMPT_TRANSITIONS.get(a["status"], set()):
+                warn.append(f"attempt {r['attempt']}: {a['status']} -> {r.get('status')} "
+                            f"is not a legal transition (applied anyway, from ts {r.get('ts')})")
+            a["status"] = r["status"]
         elif t == "spend":
             spends[r["split"]] = spends.get(r["split"], 0) + 1
     return hyps, atts, spends
 
 
-def next_id(records, prefix):
+def next_id(records, kind, root=None):
+    """Mint the next id of `kind` ("H", "A", "L") for the caller's holder.
+
+    Counts only ids carrying this holder's prefix, so two clones minting at the
+    same time never collide. Legacy unprefixed ids (H1, A7) are left alone."""
+    prefix = f"{holder(root)}-{kind}"
     n = 0
     for r in records:
         rid = r.get("id", "")
@@ -159,7 +207,7 @@ def validate_record(root, rec, records):
     human = os.environ.get("SA_HUMAN") == "1"
 
     if t == "hypothesis":
-        rec.setdefault("id", next_id(records, "H"))
+        rec.setdefault("id", next_id(records, "H", root))
         if not rec.get("title"):
             die("hypothesis needs a title")
 
@@ -186,7 +234,7 @@ def validate_record(root, rec, records):
                 die("shelving requires reopen_when: what evidence would reopen this hypothesis")
 
     elif t == "attempt":
-        rec.setdefault("id", next_id(records, "A"))
+        rec.setdefault("id", next_id(records, "A", root))
         if rec.get("hypothesis") not in hyps:
             die(f"attempt must name an existing hypothesis (got {rec.get('hypothesis')})")
         if not rec.get("family"):
@@ -230,6 +278,12 @@ def ledger_append(root, rec, skip_validation=False):
     if not skip_validation:
         rec = validate_record(root, rec, records)
     rec.setdefault("ts", now_iso())
+    h = holder(root, required=False)
+    if h:
+        rec.setdefault("holder", h)
+    tick = os.environ.get("SA_TICK")
+    if tick:
+        rec.setdefault("tick", tick)
     with open(ledger_path(root), "a") as f:
         f.write(json.dumps(rec, separators=(",", ":")) + "\n")
     return rec
@@ -237,8 +291,37 @@ def ledger_append(root, rec, skip_validation=False):
 
 # ---------------------------------------------------------------- engine
 
+def engine_bin(cfg):
+    """The engine binary path. `campaign.toml` stores it with `~` and may use
+    $VARS so the file is portable between machines; SA_ENGINE_BIN overrides."""
+    raw = os.environ.get("SA_ENGINE_BIN") or cfg["engine"]["bin"]
+    return Path(os.path.expanduser(os.path.expandvars(raw)))
+
+
 def engine_repo(cfg):
-    return Path(cfg["engine"]["bin"]).resolve().parents[2]
+    return engine_bin(cfg).resolve().parents[2]
+
+
+def engine_head(cfg):
+    """Short HEAD of the engine repo, or None when it is not a git checkout."""
+    r = subprocess.run(["git", "-C", str(engine_repo(cfg)), "rev-parse", "--short", "HEAD"],
+                       capture_output=True, text=True)
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def check_engine_pin(cfg):
+    """Refuse to produce numbers against an engine other than the pinned one.
+
+    A campaign compares evals across months; a rebuilt engine with different
+    fill semantics makes those comparisons lies. Campaigns created before the
+    pin existed have no key and skip the check. Returns the current HEAD."""
+    pin = cfg.get("engine", {}).get("commit")
+    head = engine_head(cfg)
+    if pin and head and head != pin and os.environ.get("SA_ALLOW_ENGINE_DRIFT") != "1":
+        die(f"engine drift: campaign.toml pins engine.commit = {pin}, the engine repo "
+            f"at {engine_repo(cfg)} is at {head}. Check out the pinned commit and "
+            "rebuild, or set SA_ALLOW_ENGINE_DRIFT=1 to accept incomparable numbers.")
+    return head
 
 
 def resolve_fill(cfg, name):
@@ -249,7 +332,7 @@ def resolve_fill(cfg, name):
 
 
 def run_engine(cfg, data_dirs, strategy, fill, frm, to, warmup_days, extra=None):
-    cmd = [cfg["engine"]["bin"], "replay", "--output", "json",
+    cmd = [str(engine_bin(cfg)), "replay", "--output", "json",
            "--strategy", str(strategy), "--fill", str(resolve_fill(cfg, fill)),
            "--from", frm, "--to", to, "--warmup-days", str(warmup_days)]
     for d in data_dirs:

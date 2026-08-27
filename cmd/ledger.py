@@ -59,7 +59,8 @@ def main():
         print(json.dumps(ledger_append(root, rec)))
 
     elif cmd == "status":
-        hyps, atts, spends = ledger_state(ledger_read(root))
+        warnings = []
+        hyps, atts, spends = ledger_state(ledger_read(root), warnings)
         print("hypotheses:")
         for hid, h in hyps.items():
             fams = ",".join(sorted(h["families"])) or "-"
@@ -68,6 +69,11 @@ def main():
         for aid, a in atts.items():
             print(f"  {aid} [{a['status']}] hyp={a['hypothesis']} family={a['family']}")
         print(f"spends: validation={spends.get('validation', 0)} holdout={spends.get('holdout', 0)}")
+        if warnings:
+            print(f"\nwarnings ({len(warnings)}): the merged ledger is out of order somewhere.")
+            print("the latest record by ts won. Reconcile in the attempt's NOTES.md:")
+            for w in warnings:
+                print(f"  {w}")
 
     elif cmd == "tail":
         n = int(rest[0]) if rest else 10

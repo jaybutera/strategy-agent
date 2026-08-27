@@ -33,9 +33,35 @@ import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 sys.path.insert(0, str(Path(__file__).parent))
-from common import REGISTRY, die, now_iso, registry, registry_save, sha256
+from common import (REGISTRY, die, engine_head, now_iso, registry,
+                    registry_save, sha256)
 
 CORE = Path(__file__).resolve().parents[1]
+
+# The campaign shim finds the core by convention, not by a baked absolute path,
+# so a clone on another machine works without editing.
+SHIM = """#!/usr/bin/env bash
+# Campaign dispatcher: ./sa <new|eval|gate|ledger|loop|digest|raw|upgrade> ...
+set -euo pipefail
+CORE="${SA_CORE:-$HOME/src/strategy-agent}"
+cmd="$1"; shift
+exec uv run --script "$CORE/cmd/$cmd.py" "$@"
+"""
+
+HOOK_CMD = ('[ -f "$CLAUDE_PROJECT_DIR/.sa/prolong.mjs" ] && '
+            'node "$CLAUDE_PROJECT_DIR/.sa/prolong.mjs" --hook claude-code || true')
+
+HOOK_EVENTS = ("SessionStart", "UserPromptSubmit", "PostToolUse", "Stop", "SessionEnd")
+
+
+def prolong_hooks():
+    """Hook block that transcribes interactive sessions into raw/<holder>/.
+
+    Project-scoped by design: the runtime lives at .sa/prolong.mjs, outside the
+    directory a global PRO-LONG install watches, so those hooks do not also fire
+    here and log every session twice."""
+    return {ev: [{"hooks": [{"type": "command", "command": HOOK_CMD}]}]
+            for ev in HOOK_EVENTS}
 
 
 def parse_args(argv):
@@ -89,6 +115,14 @@ def slice_train(src, dst, train_windows, head_days):
     return out.num_rows
 
 
+def tilde(path):
+    """Write paths with `~` so campaign.toml and the allowlist survive being
+    cloned onto another machine with a different home directory."""
+    p = str(path)
+    home = str(Path.home())
+    return "~" + p[len(home):] if p == home or p.startswith(home + "/") else p
+
+
 def render(template, subs):
     text = (CORE / "templates" / template).read_text()
     for k, v in subs.items():
@@ -114,7 +148,7 @@ def main():
     vault = Path.home() / ".strategy-agent" / "vault" / name
     (vault / "data").mkdir(parents=True)
     (root / "data").mkdir(parents=True)
-    for d in ("attempts", "dossiers", "inbox", "digests", ".sa/ticks", ".claude"):
+    for d in ("attempts", "dossiers", "inbox", "digests", ".sa/ticks", ".claude", "raw"):
         (root / d).mkdir(parents=True, exist_ok=True)
 
     checksums = {}
@@ -127,6 +161,9 @@ def main():
         print(f"  {asset}: {n} train-window rows -> data/, full series -> vault")
 
     assets = sorted(o["parquet"])
+    # Pin the engine: evals months apart are only comparable against one build.
+    head = engine_head({"engine": {"bin": str(engine)}})
+    commit_line = f'\ncommit = "{head}"    # eval and gate refuse to run against another build' if head else ""
     contracts = ""
     if o["contracts"]:
         contracts = Path(o["contracts"]).read_text()
@@ -143,7 +180,8 @@ created = "{now_iso()}"
 scheme = "{o['scheme']}"
 
 [engine]
-bin = "{engine}"
+# Written with ~ so this file is portable; SA_ENGINE_BIN overrides it.
+bin = "{tilde(engine)}"{commit_line}
 warmup_days = {warmup}
 timeframes = [{", ".join(f'"{t}"' for t in o['timeframes'].split(","))}]
 # First lens is the headline, last is the pessimistic floor.
@@ -179,7 +217,14 @@ shelve_families = {int(o['shelve-families'])}
     (root / "CLAUDE.md").write_text(render("campaign_CLAUDE.md", subs))
     (root / "goal.md").write_text(render("goal.md", subs))
     (root / "INDEX.md").write_text(render("INDEX.md", subs))
+    (root / "LESSONS.md").write_text(render("LESSONS.md", subs))
+    (root / "steer.md").write_text(render("steer.md", subs))
+    (root / "dossiers" / "_template.md").write_text(render("dossier.md", subs))
     (root / ".sa" / "tick.md").write_text(render("tick.md", subs))
+    (root / ".sa" / "merge.md").write_text(render("merge.md", subs))
+    prolong = root / ".sa" / "prolong.mjs"
+    prolong.write_text((CORE / "templates" / "prolong.mjs").read_text())
+    prolong.chmod(0o755)
     tpl = root / "attempts" / "_template"
     tpl.mkdir()
     (tpl / "preset.toml").write_text(render("preset.toml", subs))
@@ -191,17 +236,17 @@ shelve_families = {int(o['shelve-families'])}
             "Bash(tail:*)", "Bash(jq:*)", "Bash(cp:*)", "Bash(mkdir:*)",
             "Bash(mv:*)", "Bash(wc:*)", "Bash(sed -n:*)",
             "WebSearch", "WebFetch",
-            f"Read(//{str(engine.parents[2]).lstrip('/')}/**)",
-        ]}}, indent=2) + "\n")
+            f"Read({tilde(engine.parents[2])}/**)",
+        ]},
+        "hooks": prolong_hooks()}, indent=2) + "\n")
     sa = root / "sa"
-    sa.write_text(f"""#!/usr/bin/env bash
-# Campaign dispatcher: ./sa <new|eval|gate|ledger|loop|digest> ...
-set -euo pipefail
-cmd="$1"; shift
-exec uv run --script "{CORE}/cmd/$cmd.py" "$@"
-""")
+    sa.write_text(SHIM)
     sa.chmod(0o755)
     (root / ".gitignore").write_text(".sa/ticks/\n")
+    # Union merge: two holders appending records must not conflict, and no
+    # record may be dropped by a merge.
+    (root / ".gitattributes").write_text("ledger.jsonl merge=union\n")
+    (root / "raw" / ".gitkeep").touch()
 
     (vault / "budget.json").write_text(json.dumps(
         {"validation_looks": int(o["val-looks"]), "holdout_looks": int(o["holdout-looks"])}) + "\n")
