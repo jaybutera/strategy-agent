@@ -114,16 +114,6 @@ commit is already the record. `./sa raw <tick-stamp|attempt-id>` replays one.
 To bring a campaign made before all this up to date, run `./sa upgrade`
 inside it. It rewrites harness files and leaves research content alone.
 
-## Honesty about enforcement
-
-The hard guarantee is topological: validation and holdout candles are not in
-the workspace, so no amount of forgotten rules leaks them into iteration.
-The ledger state machine and spend counters are guardrails an adversarial
-agent could route around with enough filesystem access; if you need that
-boundary hard too, run ticks in a container that mounts only the campaign
-directory. The vault lives at `~/.strategy-agent/vault/<name>` and no
-campaign file records that path.
-
 ## Scope
 
 The lifecycle runs hypothesis -> attempts -> validated -> candidate ->
