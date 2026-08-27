@@ -11,7 +11,8 @@
 Each tick is a headless `claude -p` invocation in the campaign directory,
 prompted from .sa/tick.md: read goal + index, probe memory, do the next most
 useful task, write back, commit. After each tick anything left uncommitted is
-committed so no tick can strand work.
+committed so no tick can strand work. Ctrl-C stops the loop the same way:
+leftovers are committed, the clone returns to master, and everything is pushed.
 
 When the campaign has an `origin` remote the loop fetches before each tick and
 pushes after it. It never merges: merging derived files is distillation, which
@@ -172,19 +173,32 @@ def main():
             cmd += ["--output-format", "stream-json", "--verbose"]
         print(f"tick {i}/{n}{' (merge)' if merge_mode else ''} -> {stamp}")
 
-        if stream:
-            r = subprocess.run(cmd, cwd=root, capture_output=True, text=True, env=env)
-            events = elide_events(r.stdout.splitlines())
-            rawdir = root / "raw" / tag / "ticks"
-            rawdir.mkdir(parents=True, exist_ok=True)
-            with open(rawdir / f"{stamp}.jsonl", "w") as f:
-                for ev in events:
-                    f.write(json.dumps(ev, separators=(",", ":")) + "\n")
-            log.write_text(result_text(events) or r.stderr)
-        else:
-            with open(log, "w") as f:
-                r = subprocess.run(cmd, cwd=root, stdout=f, stderr=subprocess.STDOUT,
-                                   text=True, env=env)
+        try:
+            if stream:
+                r = subprocess.run(cmd, cwd=root, capture_output=True, text=True, env=env)
+                events = elide_events(r.stdout.splitlines())
+                rawdir = root / "raw" / tag / "ticks"
+                rawdir.mkdir(parents=True, exist_ok=True)
+                with open(rawdir / f"{stamp}.jsonl", "w") as f:
+                    for ev in events:
+                        f.write(json.dumps(ev, separators=(",", ":")) + "\n")
+                log.write_text(result_text(events) or r.stderr)
+            else:
+                with open(log, "w") as f:
+                    r = subprocess.run(cmd, cwd=root, stdout=f, stderr=subprocess.STDOUT,
+                                       text=True, env=env)
+        except KeyboardInterrupt:
+            # Ctrl-C is how a person stops the loop for the night. The agent
+            # process is already dead; keep whatever it left, return to trunk,
+            # and push so the other holder sees the state.
+            print(f"\ninterrupted during tick {stamp}; committing leftovers and stopping.")
+            if git(root, "status", "--porcelain"):
+                git_commit_all(root, f"tick {stamp}: interrupted, leftovers committed")
+            git(root, "checkout", "-q", "master", check=False)
+            if sync:
+                subprocess.run(["git", "-C", str(root), "push", "origin", "--all"],
+                               capture_output=True, text=True)
+            sys.exit(130)
 
         for line in log.read_text().strip().splitlines()[-6:]:
             print(f"  {line}")
